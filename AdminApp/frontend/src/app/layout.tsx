@@ -1,14 +1,6 @@
-"use client";
-
-//import type { Metadata } from "next";
-import "./../styles/global.scss";
-import { Provider } from "react-redux";
-import { store } from "@/shared/store";
-
-// export const metadata: Metadata = {
-//   title: "Admin | Детектив Шпаргалкин",
-//   description: "Панель администратора",
-// };
+// frontend/app/layout.tsx
+import "./globals.css";
+import { Navbar } from "@/shared/ui/Navbar";
 
 export default function RootLayout({
   children,
@@ -17,10 +9,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ru">
-      <body>
-        <Provider store={store}>
-          <div className="container">{children}</div>
-        </Provider>
+      <body className="bg-gray-100 min-h-screen">
+        <Navbar />
+        {children}
       </body>
     </html>
   );
