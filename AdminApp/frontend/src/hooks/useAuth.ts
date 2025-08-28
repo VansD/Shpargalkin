@@ -18,7 +18,7 @@ export function useAuth() {
 
     async function fetchUser() {
       try {
-        const res = await fetch("/api/auth/me", {
+        const res = await fetch(`/api/auth/me`, {
           credentials: "include",
         });
 
@@ -45,7 +45,7 @@ export function useAuth() {
   }, []);
 
   const logout = async () => {
-    await fetch("/api/auth/logout", {
+    await fetch(`/api/auth/logout`, {
       method: "POST",
       credentials: "include",
     });

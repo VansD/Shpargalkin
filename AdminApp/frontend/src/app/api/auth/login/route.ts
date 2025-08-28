@@ -1,87 +1,118 @@
 import { NextResponse } from "next/server";
 import { cookies, headers } from "next/headers";
 
+// Constants for better maintainability
+const CSRF_COOKIE_NAME = process.env.CSRF_COOKIE_NAME || "csrf_token";
+const JWT_COOKIE_NAME = process.env.JWT_COOKIE_NAME || "access_token";
+const REFRESH_COOKIE_NAME = process.env.REFRESH_COOKIE_NAME || "refresh_token";
+const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || undefined;
+const DEFAULT_EXPIRES_IN = 60 * 60; // 1 hour
+const REMEMBER_ME_ACCESS_DURATION = 60 * 60 * 24 * 7; // 7 days
+const REMEMBER_ME_REFRESH_DURATION = 60 * 60 * 24 * 30; // 30 days
+const DEFAULT_REFRESH_DURATION = 60 * 60 * 24; // 1 day
+
+// Common cookie options
+const COMMON_COOKIE_OPTIONS = {
+  httpOnly: true,
+  sameSite: "strict" as const,
+  secure: process.env.NODE_ENV === "production",
+  path: "/",
+  domain: COOKIE_DOMAIN,
+};
+
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => null);
-  if (!body?.email || !body?.password) {
-    return NextResponse.json(
-      { message: "Email и пароль обязательны" },
-      { status: 400 }
-    );
-  }
-
-  // CSRF check (double submit cookie)
-  const csrfHeader = (await headers()).get("x-csrf-token");
-  const csrfCookieName = process.env.CSRF_COOKIE_NAME || "csrf_token";
-  const csrfCookie = (await cookies()).get(csrfCookieName)?.value;
-  if (!csrfHeader || !csrfCookie || csrfHeader !== csrfCookie) {
-    return NextResponse.json(
-      { message: "CSRF проверка не пройдена" },
-      { status: 403 }
-    );
-  }
-
-  const backend = process.env.BACKEND_URL || "http://localhost:5000/api";
-  const remember = !!body.remember;
-
   try {
-    const res = await fetch(`${backend}/auth/login`, {
+    const body = await req.json();
+
+    if (!body?.email || !body?.password) {
+      return NextResponse.json(
+        { message: "Email и пароль обязательны" },
+        { status: 400 }
+      );
+    }
+
+    // CSRF check (double submit cookie)
+    const csrfHeader = (await headers()).get("x-csrf-token");
+    const csrfCookie = (await cookies()).get(CSRF_COOKIE_NAME)?.value;
+
+    if (!csrfHeader || !csrfCookie || csrfHeader !== csrfCookie) {
+      return NextResponse.json(
+        { message: "CSRF проверка не пройдена" },
+        { status: 403 }
+      );
+    }
+
+    const rememberMe = !!body.remember;
+
+    const response = await fetch(`/api/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: body.email, password: body.password }),
+      headers: {
+        "Content-Type": "application/json",
+        // Consider adding CSRF header here if backend needs it
+      },
+      body: JSON.stringify({
+        email: body.email,
+        password: body.password,
+      }),
     });
 
-    if (!res.ok) {
-      const payload = await res.json().catch(() => null);
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => ({}));
       return NextResponse.json(
-        { message: payload?.message ?? "Неверные учетные данные" },
-        { status: res.status }
+        { message: errorPayload.message ?? "Неверные учетные данные" },
+        { status: response.status }
       );
     }
 
-    const payload = await res.json();
-    // Expecting: { accessToken, refreshToken, expiresIn }
-    const accessToken = payload.accessToken;
-    const refreshToken = payload.refreshToken;
-    const expiresIn =
-      typeof payload.expiresIn === "number" ? payload.expiresIn : 60 * 60;
+    const payload = await response.json();
 
-    const domain = process.env.COOKIE_DOMAIN || undefined;
-    const common = {
-      httpOnly: true,
-      sameSite: "strict" as const,
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      domain,
-    };
-
-    const maxAgeAccess = remember ? 60 * 60 * 24 * 7 : expiresIn; // 7 days if remember
-    const maxAgeRefresh = remember ? 60 * 60 * 24 * 30 : 60 * 60 * 24; // 30 days or 1 day
-
-    // ✅ теперь сетим куки через NextResponse
-    const response = NextResponse.json({ ok: true });
-
-    response.cookies.set(
-      process.env.JWT_COOKIE_NAME || "access_token",
+    // Destructure with defaults for better safety
+    const {
       accessToken,
-      { ...common, maxAge: maxAgeAccess }
-    );
+      refreshToken,
+      expiresIn = DEFAULT_EXPIRES_IN,
+    } = payload;
+
+    if (!accessToken) {
+      throw new Error("Missing access token in response");
+    }
+
+    // Calculate cookie durations
+    const accessTokenMaxAge = rememberMe
+      ? REMEMBER_ME_ACCESS_DURATION
+      : expiresIn;
+    const refreshTokenMaxAge = rememberMe
+      ? REMEMBER_ME_REFRESH_DURATION
+      : DEFAULT_REFRESH_DURATION;
+
+    // Create response and set cookies
+    const nextResponse = NextResponse.json({ ok: true });
+
+    nextResponse.cookies.set(JWT_COOKIE_NAME, accessToken, {
+      ...COMMON_COOKIE_OPTIONS,
+      maxAge: accessTokenMaxAge,
+    });
 
     if (refreshToken) {
-      response.cookies.set(
-        process.env.REFRESH_COOKIE_NAME || "refresh_token",
-        refreshToken,
-        { ...common, maxAge: maxAgeRefresh }
-      );
+      nextResponse.cookies.set(REFRESH_COOKIE_NAME, refreshToken, {
+        ...COMMON_COOKIE_OPTIONS,
+        maxAge: refreshTokenMaxAge,
+      });
     }
 
-    // Optional: rotate CSRF on login
-    response.cookies.delete(csrfCookieName);
+    // Rotate CSRF token on successful login as security best practice
+    nextResponse.cookies.delete(CSRF_COOKIE_NAME);
 
-    return response;
-  } catch (e) {
+    return nextResponse;
+  } catch (error) {
+    console.error("Login error:", error);
     return NextResponse.json(
-      { message: "Сервер авторизации недоступен" },
+      {
+        message:
+          error instanceof Error
+            ? error.message
+            : "Сервер авторизации недоступен",
+      },
       { status: 502 }
     );
   }
